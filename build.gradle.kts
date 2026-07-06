@@ -71,7 +71,7 @@ tasks {
 
     // Optional corpus verifier for SEP-0051/XDR-JSON. It is intentionally not wired into
     // `test` or `check`; run it explicitly via `./gradlew verifyXdrJson --args='...'`.
-    register<JavaExec>("verifyXdrJson") {
+    val verifyXdrJson by tasks.registering(JavaExec::class) {
         group = "verification"
         description = "Verifies generated XDR JSON against a corpus and the stellar CLI."
         classpath = sourceSets.test.get().runtimeClasspath
@@ -79,14 +79,14 @@ tasks {
         dependsOn(testClasses)
     }
 
-    val sourcesJar = tasks.register<Jar>("sourcesJar") {
-        archiveClassifier = "sources"
+    val sourcesJar by tasks.registering(Jar::class) {
+        archiveClassifier.set("sources")
         from(sourceSets.main.get().allSource)
     }
 
-    val uberJar = tasks.register<Jar>("uberJar") {
+    val uberJar by tasks.registering(Jar::class) {
         // https://docs.gradle.org/current/userguide/working_with_files.html#sec:creating_uber_jar_exampl
-        archiveClassifier = "uber"
+        archiveClassifier.set("uber")
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
         from(sourceSets.main.get().output)
         dependsOn(configurations.runtimeClasspath)
@@ -108,13 +108,13 @@ tasks {
         }
     }
 
-    val javadocJar = tasks.register<Jar>("javadocJar") {
-        archiveClassifier = "javadoc"
+    val javadocJar by tasks.registering(Jar::class) {
+        archiveClassifier.set("javadoc")
         dependsOn(javadoc)
         from(javadoc.get().destinationDir) // It needs to be placed after the javadoc task, otherwise it cannot read the path we set.
     }
 
-    register<Copy>("updateGitHook") {
+    val updateGitHook by tasks.registering(Copy::class) {
         from("scripts/pre-commit.sh") { rename { it.removeSuffix(".sh") } }
         into(".git/hooks")
         doLast {
