@@ -8,7 +8,7 @@ plugins {
     id("com.github.ben-manes.versions") version "0.54.0"
     id("io.freefair.lombok") version "9.5.0"
     id("com.gradleup.nmcp").version("1.6.0")
-    kotlin("jvm") version "2.4.0"
+    kotlin("jvm") version "2.1.0"
 }
 
 group = "io.stellarforge"
@@ -79,12 +79,12 @@ tasks {
         dependsOn(testClasses)
     }
 
-    val sourcesJar by registering(Jar::class) {
+    val sourcesJar = tasks.register<Jar>("sourcesJar") {
         archiveClassifier = "sources"
         from(sourceSets.main.get().allSource)
     }
 
-    val uberJar by registering(Jar::class) {
+    val uberJar = tasks.register<Jar>("uberJar") {
         // https://docs.gradle.org/current/userguide/working_with_files.html#sec:creating_uber_jar_exampl
         archiveClassifier = "uber"
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
@@ -108,7 +108,7 @@ tasks {
         }
     }
 
-    val javadocJar by registering(Jar::class) {
+    val javadocJar = tasks.register<Jar>("javadocJar") {
         archiveClassifier = "javadoc"
         dependsOn(javadoc)
         from(javadoc.get().destinationDir) // It needs to be placed after the javadoc task, otherwise it cannot read the path we set.
