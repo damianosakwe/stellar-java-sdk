@@ -1,0 +1,144 @@
+name: "Build"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_run:
+    workflows: ["Test"]
+    types:
+      - completed
+
+env:
+  JAVA_VERSION: "21"
+  JAVA_DISTRIBUTION: "microsoft"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build artifacts
+        run: ./gradlew build -x test -x jacocoTestReport --no-daemon --stacktrace
+
+      - name: Persist JAR Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jars
+          path: build/libs/*.jar
+          retention-days: 30
+
+  javadoc:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Generate JavaDoc
+        run: ./gradlew javadoc --no-daemon --stacktrace
+
+      - name: Persist Documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: javadoc
+          path: javadoc
+          retention-days: 30
+
+  android-test:
+    needs: build
+    runs-on: ubuntu-latest
+    name: android-test (api ${{ matrix.emulator.api-level }})
+    strategy:
+      fail-fast: false
+      matrix:
+        emulator:
+          [
+            { api-level: 23, target: google_apis },
+            { api-level: 34, target: playstore },
+          ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download JAR Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jars
+          path: android_test/app/libs/
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-android-${{ hashFiles('android_test/**/*.gradle*', 'android_test/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-android-
+
+      - name: Run Android tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          working-directory: ./android_test
+          api-level: ${{ matrix.emulator.api-level }}
+          target: ${{ matrix.emulator.target }}
+          script: ./gradlew connectedCheck --no-daemon
+          arch: x86_64
+          profile: "pixel_2"
+
+      - name: Archive Android test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-results-api-${{ matrix.emulator.api-level }}
+          path: android_test/app/build/reports/
+          retention-days: 30

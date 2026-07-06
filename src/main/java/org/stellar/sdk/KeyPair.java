@@ -1,0 +1,473 @@
+package org.stellar.sdk;
+
+import static java.lang.System.arraycopy;
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.security.SecureRandom;
+import java.security.Security;
+import java.util.Arrays;
+import java.util.Objects;
+import lombok.NonNull;
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
+import org.bouncycastle.crypto.signers.Ed25519Signer;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.jetbrains.annotations.Nullable;
+import org.stellar.sdk.exception.UnexpectedException;
+import org.stellar.sdk.xdr.AccountID;
+import org.stellar.sdk.xdr.DecoratedSignature;
+import org.stellar.sdk.xdr.PublicKeyType;
+import org.stellar.sdk.xdr.SignatureHint;
+import org.stellar.sdk.xdr.Uint256;
+import org.stellar.sdk.xdr.XdrDataOutputStream;
+
+/** Holds a Stellar keypair. */
+public class KeyPair {
+  @NonNull private final byte[] publicKeyBytes;
+  @Nullable private final Ed25519PrivateKeyParameters privateKey;
+
+  /**
+   * Cached Ed25519PublicKeyParameters for signature verification. Lazily initialized because some
+   * valid Stellar addresses (like GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF which is
+   * 32 zero bytes) are not valid Ed25519 public keys.
+   */
+  @Nullable private Ed25519PublicKeyParameters ed25519PublicKey;
+
+  static {
+    Security.addProvider(new BouncyCastleProvider());
+  }
+
+  /**
+   * Creates a new KeyPair from the given public key bytes and optional private key.
+   *
+   * @param publicKeyBytes The 32-byte public key for this KeyPair.
+   * @param privateKey The private key for this KeyPair or null if you want a public key only
+   */
+  private KeyPair(
+      @NonNull byte[] publicKeyBytes, @Nullable Ed25519PrivateKeyParameters privateKey) {
+    this.publicKeyBytes = publicKeyBytes;
+    this.privateKey = privateKey;
+    this.ed25519PublicKey = null;
+  }
+
+  /**
+   * Creates a new KeyPair from an Ed25519 public key and optional private key.
+   *
+   * @param ed25519PublicKey The Ed25519 public key for this KeyPair.
+   * @param privateKey The private key for this KeyPair or null if you want a public key only
+   */
+  private KeyPair(
+      @NonNull Ed25519PublicKeyParameters ed25519PublicKey,
+      @Nullable Ed25519PrivateKeyParameters privateKey) {
+    this.publicKeyBytes = ed25519PublicKey.getEncoded();
+    this.privateKey = privateKey;
+    this.ed25519PublicKey = ed25519PublicKey;
+  }
+
+  /**
+   * Returns true if this Keypair is capable of signing.
+   *
+   * @return {@code true} if this keypair has a private key
+   */
+  public boolean canSign() {
+    return privateKey != null;
+  }
+
+  /**
+   * Creates a new Stellar KeyPair from a strkey encoded Stellar secret seed.
+   *
+   * @param seed Char array containing strkey encoded Stellar secret seed.
+   * @return {@link KeyPair}
+   * @throws IllegalArgumentException if the provided seed is invalid
+   */
+  public static KeyPair fromSecretSeed(char[] seed) {
+    byte[] decoded = StrKey.decodeEd25519SecretSeed(seed);
+    return fromSecretSeed(decoded);
+  }
+
+  /**
+   * <strong>Insecure</strong> Creates a new Stellar KeyPair from a strkey encoded Stellar secret
+   * seed. This method is <u>insecure</u>. Use only if you are aware of security implications.
+   *
+   * @param seed The strkey encoded Stellar secret seed.
+   * @return {@link KeyPair}
+   * @throws IllegalArgumentException if the provided seed is invalid
+   * @see <a href=
+   *     "http://docs.oracle.com/javase/1.5.0/docs/guide/security/jce/JCERefGuide.html#PBEEx"
+   *     target="_blank">Using Password-Based Encryption</a>
+   */
+  public static KeyPair fromSecretSeed(String seed) {
+    char[] charSeed = seed.toCharArray();
+    KeyPair keypair = fromSecretSeed(charSeed);
+    Arrays.fill(charSeed, '\0');
+    return keypair;
+  }
+
+  /**
+   * Creates a new Stellar keypair from a raw 32 byte secret seed.
+   *
+   * @param seed The 32 byte secret seed.
+   * @return {@link KeyPair}
+   * @throws IllegalArgumentException if the provided seed is invalid
+   */
+  public static KeyPair fromSecretSeed(byte[] seed) {
+    Ed25519PrivateKeyParameters privateKey;
+    try {
+      privateKey = new Ed25519PrivateKeyParameters(seed, 0);
+    } catch (Exception e) {
+      throw new IllegalArgumentException("Secret seed is invalid", e);
+    }
+    Ed25519PublicKeyParameters publicKey = privateKey.generatePublicKey();
+    return new KeyPair(publicKey, privateKey);
+  }
+
+  /**
+   * Creates a new Stellar KeyPair from a strkey encoded Stellar account ID.
+   *
+   * @param accountId The strkey encoded Stellar account ID.
+   * @return {@link KeyPair}
+   * @throws IllegalArgumentException if the provided account ID is invalid
+   */
+  public static KeyPair fromAccountId(String accountId) {
+    byte[] decoded = StrKey.decodeEd25519PublicKey(accountId);
+    return fromPublicKey(decoded);
+  }
+
+  /**
+   * Creates a new Stellar keypair from a 32 byte address.
+   *
+   * <p>Note: This method accepts any 32-byte array as a public key, even if it is not a valid
+   * Ed25519 public key point (e.g., all zeros). Such keypairs can still be used for address
+   * representation but will throw an exception when attempting to verify signatures.
+   *
+   * @param publicKey The 32 byte public key.
+   * @return {@link KeyPair}
+   * @throws IllegalArgumentException if the provided public key is not 32 bytes
+   */
+  public static KeyPair fromPublicKey(byte[] publicKey) {
+    if (publicKey.length != 32) {
+      throw new IllegalArgumentException("Public key must be 32 bytes");
+    }
+    return new KeyPair(Arrays.copyOf(publicKey, 32), null);
+  }
+
+  /**
+   * Finds the KeyPair for the path m/44'/148'/accountNumber' using the method described in <a href=
+   * "https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0005.md">SEP-0005</a>.
+   *
+   * <p>You can generate a BIP39 seed using a library like <a
+   * href="https://github.com/lightsail-network/mnemonic4j">mnemonic4j</a>.
+   *
+   * @param bip39Seed The output of BIP0039
+   * @param accountNumber The number of the account
+   * @return KeyPair with secret
+   * @throws IllegalArgumentException if the provided bip39Seed is invalid
+   */
+  public static KeyPair fromBip39Seed(byte[] bip39Seed, int accountNumber) {
+    try {
+      return KeyPair.fromSecretSeed(
+          SLIP10.deriveEd25519PrivateKey(bip39Seed, 44, 148, accountNumber));
+    } catch (Exception e) {
+      throw new IllegalArgumentException(e);
+    }
+  }
+
+  /**
+   * Generates a random Stellar keypair.
+   *
+   * @return a random Stellar keypair.
+   */
+  public static KeyPair random() {
+    Ed25519PrivateKeyParameters privateKey = new Ed25519PrivateKeyParameters(new SecureRandom());
+    Ed25519PublicKeyParameters publicKey = privateKey.generatePublicKey();
+    return new KeyPair(publicKey, privateKey);
+  }
+
+  /**
+   * Returns the human-readable account ID encoded in strkey.
+   *
+   * @return the account ID starting with {@code G}
+   */
+  public String getAccountId() {
+    return StrKey.encodeEd25519PublicKey(getPublicKey());
+  }
+
+  /**
+   * Returns the human-readable secret seed encoded in strkey.
+   *
+   * <p>WARNING: This method returns the secret seed of the keypair. The secret seed should be
+   * handled with care and not be exposed to anyone else. Exposing the secret seed can lead to the
+   * theft of the account.
+   *
+   * @return char[] The secret seed of the keypair. If the keypair was created without a secret
+   *     seed, this method will return null.
+   */
+  public char[] getSecretSeed() {
+    if (privateKey == null) {
+      return null;
+    }
+    return StrKey.encodeEd25519SecretSeed(privateKey.getEncoded());
+  }
+
+  /**
+   * Returns the raw 32 byte public key.
+   *
+   * @return a copy of the 32-byte public key
+   */
+  public byte[] getPublicKey() {
+    return Arrays.copyOf(publicKeyBytes, 32);
+  }
+
+  /**
+   * Returns the signature hint for this keypair.
+   *
+   * @return the last 4 bytes of the XDR-encoded public key as a {@link SignatureHint}
+   */
+  public SignatureHint getSignatureHint() {
+    ByteArrayOutputStream publicKeyBytesStream = new ByteArrayOutputStream();
+    XdrDataOutputStream xdrOutputStream = new XdrDataOutputStream(publicKeyBytesStream);
+
+    try {
+      this.getXdrPublicKey().encode(xdrOutputStream);
+    } catch (IOException e) {
+      throw new UnexpectedException(e);
+    }
+
+    byte[] publicKeyBytes = publicKeyBytesStream.toByteArray();
+    byte[] signatureHintBytes =
+        Arrays.copyOfRange(publicKeyBytes, publicKeyBytes.length - 4, publicKeyBytes.length);
+    SignatureHint signatureHint = new SignatureHint();
+    signatureHint.setSignatureHint(signatureHintBytes);
+    return signatureHint;
+  }
+
+  /**
+   * Returns the XDR {@link org.stellar.sdk.xdr.PublicKey} for this keypair.
+   *
+   * @return the XDR public key
+   */
+  public org.stellar.sdk.xdr.PublicKey getXdrPublicKey() {
+    org.stellar.sdk.xdr.PublicKey publicKey = new org.stellar.sdk.xdr.PublicKey();
+    publicKey.setDiscriminant(PublicKeyType.PUBLIC_KEY_TYPE_ED25519);
+    Uint256 uint256 = new Uint256();
+    uint256.setUint256(getPublicKey());
+    publicKey.setEd25519(uint256);
+    return publicKey;
+  }
+
+  /**
+   * Returns the XDR {@link AccountID} for this keypair.
+   *
+   * @return the XDR account ID
+   */
+  public AccountID getXdrAccountId() {
+    AccountID accountID = new AccountID();
+    accountID.setAccountID(getXdrPublicKey());
+    return accountID;
+  }
+
+  /**
+   * Creates a new KeyPair from an XDR {@link org.stellar.sdk.xdr.PublicKey}.
+   *
+   * @param key The XDR {@link org.stellar.sdk.xdr.PublicKey} object.
+   * @return KeyPair
+   */
+  public static KeyPair fromXdrPublicKey(org.stellar.sdk.xdr.PublicKey key) {
+    return KeyPair.fromPublicKey(key.getEd25519().getUint256());
+  }
+
+  /**
+   * Sign the provided data with the keypair's private key.
+   *
+   * @param data The data to sign.
+   * @return signed bytes, null if the private key for this keypair is null.
+   * @throws IllegalStateException if the private key for this keypair is null.
+   */
+  public byte[] sign(byte[] data) {
+    if (privateKey == null) {
+      throw new IllegalStateException(
+          "KeyPair does not contain secret key. Use KeyPair.fromSecretSeed method to create a new KeyPair with a secret key.");
+    }
+    Ed25519Signer signer = new Ed25519Signer();
+    signer.init(true, privateKey);
+    signer.update(data, 0, data.length);
+    return signer.generateSignature();
+  }
+
+  /**
+   * Sign the provided data with the keypair's private key and returns {@link DecoratedSignature}.
+   *
+   * @param data the data to sign
+   * @return DecoratedSignature
+   */
+  public DecoratedSignature signDecorated(byte[] data) {
+    byte[] signatureBytes = this.sign(data);
+
+    org.stellar.sdk.xdr.Signature signature = new org.stellar.sdk.xdr.Signature();
+    signature.setSignature(signatureBytes);
+
+    DecoratedSignature decoratedSignature = new DecoratedSignature();
+    decoratedSignature.setHint(this.getSignatureHint());
+    decoratedSignature.setSignature(signature);
+    return decoratedSignature;
+  }
+
+  /**
+   * Sign the provided payload data for payload signer where the input is the data being signed. Per
+   * the <a href=
+   * "https://github.com/stellar/stellar-protocol/blob/master/core/cap-0040.md#signature-hint">CAP-40
+   * Signature spec</a> {@link DecoratedSignature}.
+   *
+   * @param signerPayload the payload signers raw data to sign
+   * @return DecoratedSignature
+   */
+  public DecoratedSignature signPayloadDecorated(byte[] signerPayload) {
+    DecoratedSignature payloadSignature = signDecorated(signerPayload);
+
+    byte[] hint = new byte[4];
+
+    // copy the last four bytes of the payload into the new hint
+    if (signerPayload.length >= hint.length) {
+      arraycopy(signerPayload, signerPayload.length - hint.length, hint, 0, hint.length);
+    } else {
+      arraycopy(signerPayload, 0, hint, 0, signerPayload.length);
+    }
+
+    // XOR the new hint with this keypair's public key hint
+    for (int i = 0; i < hint.length; i++) {
+      hint[i] ^= payloadSignature.getHint().getSignatureHint()[i];
+    }
+    payloadSignature.getHint().setSignatureHint(hint);
+    return payloadSignature;
+  }
+
+  /**
+   * Verify the provided data and signature match this keypair's public key.
+   *
+   * @param data The data that was signed.
+   * @param signature The signature.
+   * @return True if they match, false otherwise.
+   * @throws IllegalStateException if the public key is not a valid Ed25519 public key (e.g., all
+   *     zeros)
+   */
+  public boolean verify(byte[] data, byte[] signature) {
+    Ed25519PublicKeyParameters ed25519Key = getEd25519PublicKey();
+    Ed25519Signer verifier = new Ed25519Signer();
+    verifier.init(false, ed25519Key);
+    verifier.update(data, 0, data.length);
+    return verifier.verifySignature(signature);
+  }
+
+  /**
+   * Gets the Ed25519PublicKeyParameters, lazily initializing it if necessary.
+   *
+   * @return The Ed25519PublicKeyParameters for this keypair.
+   * @throws IllegalStateException if the public key bytes do not represent a valid Ed25519 public
+   *     key
+   */
+  private Ed25519PublicKeyParameters getEd25519PublicKey() {
+    if (ed25519PublicKey == null) {
+      try {
+        ed25519PublicKey = new Ed25519PublicKeyParameters(publicKeyBytes, 0);
+      } catch (Exception e) {
+        throw new IllegalStateException(
+            "Public key is not a valid Ed25519 public key. This can happen for special addresses like GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF (32 zero bytes).",
+            e);
+      }
+    }
+    return ed25519PublicKey;
+  }
+
+  @Override
+  public boolean equals(Object object) {
+    if (this == object) return true;
+    if (object == null || getClass() != object.getClass()) {
+      return false;
+    }
+    KeyPair keyPair = (KeyPair) object;
+    if (!Arrays.equals(publicKeyBytes, keyPair.publicKeyBytes)) {
+      return false;
+    }
+    // privateKey can be null
+    return Arrays.equals(
+        privateKey == null ? null : privateKey.getEncoded(),
+        keyPair.privateKey == null ? null : keyPair.privateKey.getEncoded());
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(
+        Arrays.hashCode(publicKeyBytes),
+        privateKey == null ? null : Arrays.hashCode(privateKey.getEncoded()));
+  }
+
+  /**
+   * Calculate the hash of a message according to <a
+   * href="https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0053.md"
+   * target="_blank">SEP-53</a>.
+   *
+   * @param message The message to hash
+   * @return The SHA-256 hash of the prefixed message.
+   */
+  private static byte[] calculateMessageHash(byte[] message) {
+    final byte[] messagePrefix = "Stellar Signed Message:\n".getBytes(UTF_8);
+    byte[] signedMessageBase = new byte[messagePrefix.length + message.length];
+    System.arraycopy(messagePrefix, 0, signedMessageBase, 0, messagePrefix.length);
+    System.arraycopy(message, 0, signedMessageBase, messagePrefix.length, message.length);
+    return Util.hash(signedMessageBase);
+  }
+
+  /**
+   * Sign a message according to <a
+   * href="https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0053.md"
+   * target="_blank">SEP-53</a>.
+   *
+   * @param message The message to sign.
+   * @return The signature bytes.
+   */
+  public byte[] signMessage(String message) {
+    return signMessage(message.getBytes(UTF_8));
+  }
+
+  /**
+   * Sign a message according to <a
+   * href="https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0053.md"
+   * target="_blank">SEP-53</a>.
+   *
+   * @param message The message to sign.
+   * @return The signature bytes.
+   */
+  public byte[] signMessage(byte[] message) {
+    byte[] messageHash = calculateMessageHash(message);
+    return sign(messageHash);
+  }
+
+  /**
+   * Verify a <a
+   * href="https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0053.md"
+   * target="_blank">SEP-53</a> signed message.
+   *
+   * @param message The original message.
+   * @param signature The signature to verify.
+   * @return True if the signature is valid for the given message, false otherwise.
+   */
+  public boolean verifyMessage(byte[] message, byte[] signature) {
+    byte[] messageHash = calculateMessageHash(message);
+    return verify(messageHash, signature);
+  }
+
+  /**
+   * Verify a <a
+   * href="https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0053.md"
+   * target="_blank">SEP-53</a> signed message.
+   *
+   * @param message The original message.
+   * @param signature The signature to verify.
+   * @return True if the signature is valid for the given message, false otherwise.
+   */
+  public boolean verifyMessage(String message, byte[] signature) {
+    return verifyMessage(message.getBytes(UTF_8), signature);
+  }
+}

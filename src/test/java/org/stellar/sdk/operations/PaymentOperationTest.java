@@ -1,0 +1,76 @@
+package org.stellar.sdk.operations;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
+import java.math.BigDecimal;
+import org.junit.Test;
+import org.stellar.sdk.Asset;
+import org.stellar.sdk.AssetTypeNative;
+import org.stellar.sdk.KeyPair;
+
+public class PaymentOperationTest {
+  @Test
+  public void testPaymentOperation() {
+    // GC5SIC4E3V56VOHJ3OZAX5SJDTWY52JYI2AFK6PUGSXFVRJQYQXXZBZF
+    KeyPair source =
+        KeyPair.fromSecretSeed("SC4CGETADVYTCR5HEAVZRB3DZQY5Y4J7RFNJTRA6ESMHIPEZUSTE2QDK");
+    // GDW6AUTBXTOC7FIKUO5BOO3OGLK4SF7ZPOBLMQHMZDI45J2Z6VXRB5NR
+    KeyPair destination =
+        KeyPair.fromSecretSeed("SDHZGHURAYXKU2KMVHPOXI6JG2Q4BSQUQCEOY72O3QQTCLR2T455PMII");
+
+    Asset asset = new AssetTypeNative();
+    BigDecimal amount = BigDecimal.valueOf(1000);
+    BigDecimal formattedAmount = new BigDecimal("1000.0000000");
+    PaymentOperation operation =
+        PaymentOperation.builder()
+            .destination(destination.getAccountId())
+            .asset(asset)
+            .amount(amount)
+            .sourceAccount(source.getAccountId())
+            .build();
+
+    org.stellar.sdk.xdr.Operation xdr = operation.toXdr();
+    PaymentOperation parsedOperation = (PaymentOperation) Operation.fromXdr(xdr);
+
+    assertEquals(10000000000L, xdr.getBody().getPaymentOp().getAmount().getInt64().longValue());
+    assertEquals(source.getAccountId(), parsedOperation.getSourceAccount());
+    assertEquals(destination.getAccountId(), parsedOperation.getDestination());
+    assertTrue(parsedOperation.getAsset() instanceof AssetTypeNative);
+    assertEquals(formattedAmount, parsedOperation.getAmount());
+
+    assertEquals(
+        "AAAAAQAAAAC7JAuE3XvquOnbsgv2SRztjuk4RoBVefQ0rlrFMMQvfAAAAAEAAAAA7eBSYbzcL5UKo7oXO24y1ckX+XuCtkDsyNHOp1n1bxAAAAAAAAAAAlQL5AA=",
+        operation.toXdrBase64());
+  }
+
+  @Test
+  public void testMuxedPaymentOperation() {
+    String source = "MA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVAAAAAAAAAAAAAJLK";
+    String destination = "MDQNY3PBOJOKYZSRMK2S7LHHGWZIUISD4QORETLMXEWXBI7KFZZMKAAAAAAMV7V2XYGQO";
+
+    Asset asset = new AssetTypeNative();
+    BigDecimal amount = BigDecimal.valueOf(1000);
+
+    PaymentOperation operation =
+        PaymentOperation.builder()
+            .destination(destination)
+            .asset(asset)
+            .amount(amount)
+            .sourceAccount(source)
+            .build();
+
+    org.stellar.sdk.xdr.Operation xdr = operation.toXdr();
+    PaymentOperation parsedOperation = (PaymentOperation) Operation.fromXdr(xdr);
+    assertEquals(destination, parsedOperation.getDestination());
+    assertEquals(source, parsedOperation.getSourceAccount());
+
+    parsedOperation = (PaymentOperation) Operation.fromXdr(xdr);
+    assertEquals(
+        "MDQNY3PBOJOKYZSRMK2S7LHHGWZIUISD4QORETLMXEWXBI7KFZZMKAAAAAAMV7V2XYGQO",
+        parsedOperation.getDestination());
+    assertEquals(
+        "MA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVAAAAAAAAAAAAAJLK",
+        parsedOperation.getSourceAccount());
+  }
+}

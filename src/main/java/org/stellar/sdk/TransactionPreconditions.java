@@ -1,0 +1,217 @@
+package org.stellar.sdk;
+
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import lombok.Builder;
+import lombok.NonNull;
+import lombok.Value;
+import org.jetbrains.annotations.Nullable;
+import org.stellar.sdk.xdr.Duration;
+import org.stellar.sdk.xdr.Int64;
+import org.stellar.sdk.xdr.PreconditionType;
+import org.stellar.sdk.xdr.Preconditions;
+import org.stellar.sdk.xdr.PreconditionsV2;
+import org.stellar.sdk.xdr.SequenceNumber;
+import org.stellar.sdk.xdr.Uint32;
+import org.stellar.sdk.xdr.Uint64;
+import org.stellar.sdk.xdr.XdrUnsignedHyperInteger;
+import org.stellar.sdk.xdr.XdrUnsignedInteger;
+
+/**
+ * Preconditions of a transaction per <a
+ * href="https://github.com/stellar/stellar-protocol/blob/master/core/cap-0021.md#specification">CAP-21</a>
+ */
+@Value
+@Builder(toBuilder = true)
+public class TransactionPreconditions {
+  public static final long MAX_EXTRA_SIGNERS_COUNT = 2;
+  public static final BigInteger TIMEOUT_INFINITE = BigInteger.ZERO;
+
+  /**
+   * The time bounds for the transaction.
+   *
+   * @param timeBounds the time bounds
+   * @return the time bounds
+   */
+  TimeBounds timeBounds;
+
+  /**
+   * The ledger bounds for the transaction.
+   *
+   * @param ledgerBounds the ledger bounds
+   * @return the ledger bounds, or null if not set
+   */
+  @Nullable LedgerBounds ledgerBounds;
+
+  /**
+   * The minimum source account sequence number this transaction is valid for. if <code>null</code>,
+   * the transaction is valid when **source account's sequence number == tx.sequence - 1**.
+   *
+   * @param minSeqNumber the minimum sequence number
+   * @return the minimum sequence number, or null if not set
+   */
+  @Nullable Long minSeqNumber; // int64
+
+  /**
+   * The minimum amount of time between source account sequence time and the ledger time when this
+   * transaction will become valid. If the value is <code>0</code>, the transaction is unrestricted
+   * by the account sequence age. Cannot be negative.
+   *
+   * @param minSeqAge the minimum sequence age
+   * @return the minimum sequence age
+   */
+  @Builder.Default @NonNull BigInteger minSeqAge = BigInteger.ZERO; // uint64
+
+  /**
+   * The minimum number of ledgers between source account sequence and the ledger number when this
+   * transaction will become valid. If the value is <code>0</code>, the transaction is unrestricted
+   * by the account sequence ledger. Cannot be negative.
+   *
+   * @param minSeqLedgerGap the minimum sequence ledger gap
+   * @return the minimum sequence ledger gap
+   */
+  long minSeqLedgerGap; // uint32
+
+  /**
+   * Required extra signers.
+   *
+   * @param extraSigners the list of extra signers
+   * @return the extra signers list
+   */
+  @Builder.Default @NonNull List<SignerKey> extraSigners = new ArrayList<>();
+
+  /**
+   * Validates the preconditions.
+   *
+   * @throws IllegalStateException if the preconditions are invalid
+   */
+  public void validate() {
+    if (timeBounds == null) {
+      throw new IllegalStateException("Invalid preconditions, must define timebounds");
+    }
+
+    if (extraSigners.size() > MAX_EXTRA_SIGNERS_COUNT) {
+      throw new IllegalStateException(
+          "Invalid preconditions, too many extra signers, can only have up to "
+              + MAX_EXTRA_SIGNERS_COUNT);
+    }
+  }
+
+  /**
+   * @return <code>true</code> if the preconditions are v2.
+   */
+  public boolean hasV2() {
+    return (ledgerBounds != null
+        || (minSeqLedgerGap > 0)
+        || (minSeqAge.compareTo(BigInteger.ZERO) > 0)
+        || minSeqNumber != null
+        || !extraSigners.isEmpty());
+  }
+
+  /**
+   * Creates a new {@link TransactionPreconditions} object from a {@link Preconditions} XDR object.
+   *
+   * @param preconditions the {@link Preconditions} object to convert
+   * @return a new {@link TransactionPreconditions} object from the given XDR object
+   */
+  public static TransactionPreconditions fromXdr(Preconditions preconditions) {
+    TransactionPreconditionsBuilder builder = new TransactionPreconditionsBuilder();
+
+    if (preconditions.getDiscriminant().equals(PreconditionType.PRECOND_V2)) {
+      if (preconditions.getV2().getTimeBounds() != null) {
+        builder.timeBounds(
+            new TimeBounds(
+                preconditions
+                    .getV2()
+                    .getTimeBounds()
+                    .getMinTime()
+                    .getTimePoint()
+                    .getUint64()
+                    .getNumber(),
+                preconditions
+                    .getV2()
+                    .getTimeBounds()
+                    .getMaxTime()
+                    .getTimePoint()
+                    .getUint64()
+                    .getNumber()));
+      }
+      if (preconditions.getV2().getExtraSigners() != null
+          && preconditions.getV2().getExtraSigners().length > 0) {
+        builder.extraSigners(
+            Arrays.stream(preconditions.getV2().getExtraSigners())
+                .map(SignerKey::fromXdr)
+                .collect(java.util.stream.Collectors.toList()));
+      }
+      if (preconditions.getV2().getMinSeqAge() != null) {
+        builder.minSeqAge(
+            preconditions.getV2().getMinSeqAge().getDuration().getUint64().getNumber());
+      }
+      if (preconditions.getV2().getLedgerBounds() != null) {
+        builder.ledgerBounds(LedgerBounds.fromXdr(preconditions.getV2().getLedgerBounds()));
+      }
+      if (preconditions.getV2().getMinSeqNum() != null) {
+        builder.minSeqNumber(preconditions.getV2().getMinSeqNum().getSequenceNumber().getInt64());
+      }
+      if (preconditions.getV2().getMinSeqLedgerGap() != null) {
+        builder.minSeqLedgerGap(
+            preconditions.getV2().getMinSeqLedgerGap().getUint32().getNumber().intValue());
+      }
+    } else {
+      if (preconditions.getTimeBounds() != null) {
+        builder.timeBounds(
+            new TimeBounds(
+                preconditions.getTimeBounds().getMinTime().getTimePoint().getUint64().getNumber(),
+                preconditions.getTimeBounds().getMaxTime().getTimePoint().getUint64().getNumber()));
+      }
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * @return the XDR object of this {@link TransactionPreconditions}
+   */
+  public Preconditions toXdr() {
+    Preconditions.PreconditionsBuilder preconditionsBuilder = Preconditions.builder();
+
+    if (hasV2()) {
+      preconditionsBuilder.discriminant(PreconditionType.PRECOND_V2);
+      PreconditionsV2.PreconditionsV2Builder v2Builder = PreconditionsV2.builder();
+      v2Builder.extraSigners(
+          extraSigners.stream()
+              .map(SignerKey::toXdr)
+              .toArray(org.stellar.sdk.xdr.SignerKey[]::new));
+      v2Builder.minSeqAge(new Duration(new Uint64(new XdrUnsignedHyperInteger(minSeqAge))));
+
+      if (ledgerBounds != null) {
+        v2Builder.ledgerBounds(
+            org.stellar.sdk.xdr.LedgerBounds.builder()
+                .minLedger(new Uint32(new XdrUnsignedInteger(ledgerBounds.getMinLedger())))
+                .maxLedger(new Uint32(new XdrUnsignedInteger(ledgerBounds.getMaxLedger())))
+                .build());
+      }
+      if (minSeqNumber != null) {
+        v2Builder.minSeqNum(new SequenceNumber(new Int64(minSeqNumber)));
+      }
+
+      v2Builder.minSeqLedgerGap(new Uint32(new XdrUnsignedInteger(minSeqLedgerGap)));
+
+      if (timeBounds != null) {
+        v2Builder.timeBounds(timeBounds.toXdr());
+      }
+      preconditionsBuilder.v2(v2Builder.build());
+    } else {
+      if (timeBounds == null) {
+        preconditionsBuilder.discriminant(PreconditionType.PRECOND_NONE);
+      } else {
+        preconditionsBuilder.discriminant(PreconditionType.PRECOND_TIME);
+        preconditionsBuilder.timeBounds(timeBounds.toXdr());
+      }
+    }
+
+    return preconditionsBuilder.build();
+  }
+}

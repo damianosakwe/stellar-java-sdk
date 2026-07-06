@@ -1,0 +1,224 @@
+plugins {
+    id("java")
+    id("jacoco")
+    id("signing")
+    id("maven-publish")
+    id("project-report")
+    id("com.diffplug.spotless") version "8.7.0"
+    id("com.github.ben-manes.versions") version "0.54.0"
+    id("io.freefair.lombok") version "9.5.0"
+    id("com.gradleup.nmcp").version("1.6.0")
+    kotlin("jvm") version "2.4.0"
+}
+
+group = "io.stellarforge"
+version = "1.0.0"
+
+java {
+    toolchain {
+        // Tests and Kotlin compilation use JDK 21. The published SDK jar
+        // still targets JDK 8 bytecode via `options.release = 8` below.
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+repositories {
+    mavenCentral()
+}
+
+spotless {
+    java {
+        importOrder("java", "javax", "io.stellarforge", "org.stellar")
+        removeUnusedImports()
+        googleJavaFormat()
+    }
+    kotlin {
+        target("src/test/kotlin/**/*.kt")
+        ktfmt("0.56").googleStyle()
+    }
+}
+
+dependencies {
+    val okhttpVersion = "4.12.0"
+
+    implementation("com.squareup.okhttp3:okhttp:${okhttpVersion}")
+    implementation("com.squareup.okhttp3:okhttp-sse:${okhttpVersion}")
+    implementation("com.moandjiezana.toml:toml4j:0.7.2")
+    implementation("com.google.code.gson:gson:2.14.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.84")
+    implementation("commons-codec:commons-codec:1.22.0")
+
+    testImplementation(kotlin("stdlib"))
+    testImplementation("org.mockito:mockito-core:5.23.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:${okhttpVersion}")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.bouncycastle:bcpkix-jdk18on:1.84")  // mock https
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.11.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    testImplementation("io.kotest:kotest-runner-junit5:6.1.11")
+    testImplementation("io.kotest:kotest-assertions-core:6.1.11")
+}
+
+tasks {
+    test {
+        useJUnitPlatform()
+    }
+
+    // Optional corpus verifier for SEP-0051/XDR-JSON. It is intentionally not wired into
+    // `test` or `check`; run it explicitly via `./gradlew verifyXdrJson --args='...'`.
+    register<JavaExec>("verifyXdrJson") {
+        group = "verification"
+        description = "Verifies generated XDR JSON against a corpus and the stellar CLI."
+        classpath = sourceSets.test.get().runtimeClasspath
+        mainClass.set("org.stellar.sdk.xdr.XdrJsonCorpusVerifier")
+        dependsOn(testClasses)
+    }
+
+    val sourcesJar by registering(Jar::class) {
+        archiveClassifier = "sources"
+        from(sourceSets.main.get().allSource)
+    }
+
+    val uberJar by registering(Jar::class) {
+        // https://docs.gradle.org/current/userguide/working_with_files.html#sec:creating_uber_jar_exampl
+        archiveClassifier = "uber"
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        from(sourceSets.main.get().output)
+        dependsOn(configurations.runtimeClasspath)
+        from({
+            configurations.runtimeClasspath.get().filter { it.name.endsWith("jar") }.map { zipTree(it) }
+        })
+        exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA") // exclude signature files in org.bouncycastle:bcprov-jdk18on
+    }
+
+    javadoc {
+        setDestinationDir(file("javadoc"))
+        isFailOnError = false
+        options {
+            // https://docs.gradle.org/current/javadoc/org/gradle/external/javadoc/StandardJavadocDocletOptions.html
+            this as StandardJavadocDocletOptions
+            isSplitIndex = true
+            memberLevel = JavadocMemberLevel.PUBLIC
+            encoding = "UTF-8"
+        }
+    }
+
+    val javadocJar by registering(Jar::class) {
+        archiveClassifier = "javadoc"
+        dependsOn(javadoc)
+        from(javadoc.get().destinationDir) // It needs to be placed after the javadoc task, otherwise it cannot read the path we set.
+    }
+
+    register<Copy>("updateGitHook") {
+        from("scripts/pre-commit.sh") { rename { it.removeSuffix(".sh") } }
+        into(".git/hooks")
+        doLast {
+            file(".git/hooks/pre-commit").setExecutable(true)
+        }
+    }
+
+
+    jacocoTestReport {
+        dependsOn(compileJava, compileKotlin, processResources)
+        reports {
+            html.required = true
+            xml.required = true
+        }
+        classDirectories.setFrom(files(classDirectories.files.map {
+            fileTree(it) {
+                exclude("org/stellar/sdk/xdr/**")
+            }
+        }))
+    }
+
+    check {
+        dependsOn(jacocoTestReport)
+    }
+
+    assemble {
+        dependsOn(sourcesJar, uberJar, javadocJar)
+    }
+
+    compileJava {
+        options.encoding = "UTF-8"
+        options.release = 8
+    }
+
+    compileTestJava {
+        options.encoding = "UTF-8"
+    }
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            artifactId = "stellar-java-sdk"
+            from(components["java"])
+            artifact(tasks["uberJar"])
+            artifact(tasks["javadocJar"])
+            artifact(tasks["sourcesJar"])
+            pom {
+                name.set("stellar-java-sdk")
+                description.set("A comprehensive Java SDK for building on the Stellar network, providing APIs to build transactions and connect to Horizon and Soroban-RPC server.")
+                url.set("https://github.com/stellarforge-io/stellar-java-sdk")
+                licenses {
+                    license {
+                        name.set("The Apache License, Version 2.0")
+                        url.set("https://github.com/stellarforge-io/stellar-java-sdk/blob/main/LICENSE")
+                        distribution.set("https://github.com/stellarforge-io/stellar-java-sdk/blob/main/LICENSE")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("stellarforge")
+                        name.set("StellarForge Team")
+                        url.set("https://github.com/stellarforge-io")
+                    }
+                    organization {
+                        name.set("StellarForge")
+                        url.set("https://github.com/stellarforge-io")
+                    }
+                }
+                scm {
+                    url.set("https://github.com/stellarforge-io/stellar-java-sdk")
+                    connection.set("scm:git:https://github.com/stellarforge-io/stellar-java-sdk.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/stellarforge-io/stellar-java-sdk.git")
+                }
+            }
+        }
+    }
+}
+
+
+signing {
+    val publishCommand = "publishAllPublicationsToCentralPortal"
+    isRequired = gradle.startParameter.taskNames.contains(publishCommand)
+    println("Need to sign? $isRequired")
+    // https://docs.gradle.org/current/userguide/signing_plugin.html#using_in_memory_ascii_armored_openpgp_subkeys
+    // export SIGNING_KEY=$(gpg2 --export-secret-keys --armor {SIGNING_KEY_ID} | grep -v '\-\-' | grep -v '^=.' | tr -d '\n')
+    val signingKey = System.getenv("SIGNING_KEY")
+    val signingKeyId = System.getenv("SIGNING_KEY_ID")
+    val signingPassword = System.getenv("SIGNING_PASSWORD")
+    if (isRequired && (signingKey == null || signingKeyId == null || signingPassword == null)) {
+        throw IllegalStateException("Please set the SIGNING_KEY, SIGNING_KEY_ID, and SIGNING_PASSWORD environment variables.")
+    }
+    println("Signing Key ID: $signingKeyId")
+    useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    sign(publishing.publications["mavenJava"])
+}
+
+nmcp {
+    publishAllPublicationsToCentralPortal {
+        username = System.getenv("SONATYPE_USERNAME")
+        password = System.getenv("SONATYPE_PASSWORD")
+        // publish manually from the portal
+        publishingType = "USER_MANAGED"
+        // or if you want to publish automatically
+        // publishingType = "AUTOMATIC"
+    }
+}

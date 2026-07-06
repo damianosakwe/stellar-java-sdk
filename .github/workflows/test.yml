@@ -1,0 +1,75 @@
+name: "Test"
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+  schedule:
+    # Every Monday at 00:30 UTC
+    - cron: "30 0 * * 1"
+
+env:
+  JAVA_VERSION: "21"
+  JAVA_DISTRIBUTION: "microsoft"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      rpc:
+        image: stellar/quickstart:latest
+        ports:
+          - 8000:8000
+        env:
+          ENABLE_LOGS: true
+          NETWORK: local
+          ENABLE_SOROBAN_RPC: true
+          PROTOCOL_VERSION: 26
+        options: >-
+          --health-cmd "curl --no-progress-meter --fail-with-body -X POST \"http://localhost:8000/rpc\" -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":8675309,\"method\":\"getNetwork\"}' && curl --no-progress-meter \"http://localhost:8000/friendbot\" | grep '\"invalid_field\": \"addr\"'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 50
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Run tests
+        run: ./gradlew check --no-daemon --stacktrace
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Archive test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            build/reports/tests/
+            build/test-results/
+          retention-days: 30
