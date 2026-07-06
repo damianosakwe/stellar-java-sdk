@@ -34,6 +34,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
       - name: Build all artifacts
         run: ./gradlew build --no-daemon --stacktrace
 
@@ -96,6 +99,9 @@ jobs:
             echo "Error: Sonatype credentials are missing"
             exit 1
           fi
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
 
       - name: Publish to Maven Central
         run: ./gradlew publishAllPublicationsToCentralPortal --no-daemon --stacktrace

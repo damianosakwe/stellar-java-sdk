@@ -38,6 +38,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
       - name: Build artifacts
         run: ./gradlew build -x test -x jacocoTestReport --no-daemon --stacktrace
 
@@ -70,6 +73,9 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
 
       - name: Generate JavaDoc
         run: ./gradlew javadoc --no-daemon --stacktrace
@@ -124,6 +130,10 @@ jobs:
           key: ${{ runner.os }}-gradle-android-${{ hashFiles('android_test/**/*.gradle*', 'android_test/**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-android-
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+        working-directory: ./android_test
 
       - name: Run Android tests
         uses: reactivecircus/android-emulator-runner@v2
