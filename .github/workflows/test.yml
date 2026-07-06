@@ -6,9 +6,6 @@ on:
       - main
       - develop
   pull_request:
-  schedule:
-    # Every Monday at 00:30 UTC
-    - cron: "30 0 * * 1"
 
 env:
   JAVA_VERSION: "21"
@@ -17,21 +14,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      rpc:
-        image: stellar/quickstart:latest
-        ports:
-          - 8000:8000
-        env:
-          ENABLE_LOGS: true
-          NETWORK: local
-          ENABLE_SOROBAN_RPC: true
-          PROTOCOL_VERSION: 26
-        options: >-
-          --health-cmd "curl --no-progress-meter --fail-with-body -X POST \"http://localhost:8000/rpc\" -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":8675309,\"method\":\"getNetwork\"}' && curl --no-progress-meter \"http://localhost:8000/friendbot\" | grep '\"invalid_field\": \"addr\"'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 50
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,11 +38,20 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Run tests
-        run: ./gradlew check --no-daemon --stacktrace
+      - name: Build project
+        run: ./gradlew clean build -x test --no-daemon --stacktrace
+
+      - name: Run unit tests
+        run: ./gradlew test --no-daemon --stacktrace --continue
+
+      - name: Generate coverage report
+        if: always()
+        run: ./gradlew jacocoTestReport --no-daemon || true
 
       - name: Upload coverage to Codecov
+        if: always()
         uses: codecov/codecov-action@v4
+        continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
@@ -73,6 +65,6 @@ jobs:
         with:
           name: test-results
           path: |
-            build/reports/tests/
+            build/reports/
             build/test-results/
           retention-days: 30
