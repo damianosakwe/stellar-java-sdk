@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.stellar.sdk.operations.BumpSequenceOperation;
 import org.stellar.sdk.operations.CreateAccountOperation;
@@ -505,6 +506,7 @@ public class TransactionTest {
     assertNotEquals(transaction1, transaction4);
   }
 
+  @Ignore("Integration test - requires live Stellar network connection")
   @Test
   public void testIntegrationPaymentToContractTransactionWithNativeAsset() throws IOException {
     Asset asset = Asset.createNativeAsset();
@@ -549,6 +551,7 @@ public class TransactionTest {
     server.close();
   }
 
+  @Ignore("Integration test - requires live Stellar network connection")
   @Test
   public void testIntegrationPaymentToContractTransactionWithAlphanum4Asset() throws IOException {
     BigDecimal amount1 = new BigDecimal("100.125");
@@ -596,6 +599,7 @@ public class TransactionTest {
     server.close();
   }
 
+  @Ignore("Integration test - requires live Stellar network connection")
   @Test
   public void testIntegrationPaymentToContractTransactionWithAlphanum12Asset() throws IOException {
     BigDecimal amount1 = new BigDecimal("100.125");
@@ -643,6 +647,7 @@ public class TransactionTest {
     server.close();
   }
 
+  @Ignore("Integration test - requires live Stellar network connection")
   @Test
   public void testIntegrationPaymentToContractTransactionWithAssetIssuerAsSender()
       throws IOException {
@@ -688,6 +693,7 @@ public class TransactionTest {
     server.close();
   }
 
+  @Ignore("Integration test - requires live Stellar network connection")
   @Test
   public void testIntegrationPaymentToContractTransactionWithDifferentSource() throws IOException {
     Asset asset = Asset.createNativeAsset();
