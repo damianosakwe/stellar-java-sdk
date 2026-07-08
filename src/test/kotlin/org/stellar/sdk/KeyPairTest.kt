@@ -8,6 +8,7 @@ import io.kotest.matchers.shouldNotBe
 import java.util.Base64
 import org.stellar.sdk.xdr.PublicKeyType
 
+@OptIn(ExperimentalStdlibApi::class)
 class KeyPairTest :
   FunSpec({
     val testKeypairs =
